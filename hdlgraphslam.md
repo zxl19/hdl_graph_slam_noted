@@ -1,136 +1,148 @@
-# hdlgraph slam 算法解析
-#### 该算法主要分为 prefiltering; floor_detection; scan_matching; hdl_graph_slam
-****
- ## prefilterfing.cpp      
-   *  这部分主要是对点云实现预处理功能，主要包括点云网格滤波，点云离群点outlier 的去除 （这里可以选择statistic或者 raduis两种方式进行滤波），以及距离滤波（只要点云在指定距离范围内的点）
-   ****
-  
-   ## floor_detection.cpp
-  * 该cpp 主要接收 prefiltering .cpp  滤波后的点云，并完成地面检测
-  * 主要是  boost::optional<Eigen::Vector4f> floor = detect(cloud); 函数功能
-       * 可以设置tilt_matrix对Y轴方向的激光倾斜角进行补偿
-       * 紧接着，调用 filtered = plane_clip(filtered, Eigen::Vector4f(0.0f, 0.0f, 1.0f, sensor_height + height_clip_range), false);函数，输入是滤波后的点云，输出是平面点云 ，vector 4f 对应的是想要的平面约束，plane clip 后续会根据平面约束滤出相关的点云
-       * normal_filtering(filtered)；filtered表示平面点云， normal_filtering 主要通过非垂直方向对点云进行滤波
-       *    pcl::RandomSampleConsensus<PointT> ransac(model_p);通过ransac 函数根据输入的准平面点云进行再一次滤波，主要滤出外点，同时保留内点，并计算平面内点所对应的平面方程系数
-       
-       
-  ## scan_matching_odometry.cpp
- * 该函数主要计算相邻两帧之间的匹配，输入为prefilterfing.cpp滤波后得到的/filtered_points，紧接
- 着进入 matching 函数
- ```
- matching（const ros::Time& stamp, const pcl::PointCloud<PointT>::ConstPtr& cloud）
- ```
- * step1: 首先判断是否是关键帧
- * step2: 这里主要调用PCL里面现成的库函数，主要有（ICP，GICP， NDT， GICP_OMP, NDT_OMP）,值得关注的是NDT_OMP，该算法通过采用多线程方式去完成NDT算法，因此效率是传统NDT算法的10倍，精度基本差不多； 这里如果选择KDTREE，那么和传统的NDT算法一致，剩下的速度比较： DIRECT1》DIRECT7， 但是DIRECT7更稳定同时速度比KDTREE 快
- * 选择完上述方法之后就开始完成匹配，这里主要是当前帧点云与Keyframe 进行匹配；
- * 有两个参数比较重要：**keyframe_delta_trans**
-     **keyframe_delta_angle** 
-                * The minimum tranlational distance and rotation angle between keyframes. If this value is zero, frames are always compared with the previous frame
+# hdl_graph_slam算法解析
 
+该算法主要分为 prefiltering、floor_detection、scan_matching、hdl_graph_slam四个部分。
 
-   ## hdl_graph_slam.cpp
-   * cloud_callback(const nav_msgs::OdometryConstPtr& odom_msg, const sensor_msgs::PointCloud2::ConstPtr& cloud_msg)
-  该函数主要是odom信息与cloud信息的同步，同步之后检查关键帧是否更新
-  * 关键帧判断 
-     这里主要看关键帧设置的这两个阈值keyframe_delta_trans；keyframe_delta_angle；
- 作者认为关键帧不能设置的太近，同时也不能太远；太近的关键帧会被抛弃，如果 keyframe_delta_trans=0 表示关键帧之间的距离为0，因此每一帧都是关键帧，scan_matching 函数就会变成相邻帧匹配； 变成关键帧的要求就是：
+------
 
+## prefilterfing.cpp
+
+* 这部分主要是对点云实现预处理功能，主要包括点云网格滤波，点云离群点outlier 的去除 （这里可以选择statistic或者 radius两种方式进行滤波），以及距离滤波（只要点云在指定距离范围内的点）
+
+------
+
+## floor_detection.cpp
+
+* 该cpp主要接收prefiltering.cpp滤波后的点云，并完成地面检测；
+* 主要是`boost::optional<Eigen::Vector4f> floor = detect(cloud)`函数，其功能如下：
+  * 可以设置`tilt_matrix`对Y轴方向的激光倾斜角进行补偿；
+  * 紧接着，调用`filtered = plane_clip(filtered, Eigen::Vector4f(0.0f, 0.0f, 1.0f, sensor_height + height_clip_range), false)`函数，输入是滤波后的点云，输出是平面点云，`Eigen::Vector 4f`对应的是想要的平面约束，`plane clip()`后续会根据平面约束滤出相关的点云；
+  * `normal_filtering(filtered)`：`filtered`表示平面点云，`normal_filtering()`主要通过非垂直方向对点云进行滤波；
+  * `pcl::RandomSampleConsensus<PointT> ransac(model_p)`通过`ransac()`函数根据输入的准平面点云进行再一次滤波，主要滤出外点，同时保留内点，并计算平面内点所对应的平面方程系数。
+
+------
+
+## scan_matching_odometry.cpp
+
+* 该函数主要计算相邻两帧之间的匹配，输入为prefilterfing.cpp滤波后得到的/filtered_points，紧接着进入`matching()`函数
+
+```C++
+matching（const ros::Time& stamp, const pcl::PointCloud<PointT>::ConstPtr& cloud）
 ```
- 
+
+* step1: 首先判断是否是关键帧；
+* step2: 这里主要调用PCL里面现成的库函数，主要有（ICP，GICP，NDT，GICP_OMP, NDT_OMP），值得关注的是NDT_OMP，该算法通过采用多线程方式去完成NDT算法，因此效率是传统NDT算法的10倍，精度基本差不多； 这里如果选择KDTREE，那么和传统的NDT算法一致，剩下的速度比较： DIRECT1》DIRECT7， 但是DIRECT7更稳定同时速度比KDTREE 快
+* 选择完上述方法之后就开始完成匹配，这里主要是当前帧点云与Keyframe 进行匹配；
+* 有两个参数比较重要：**keyframe_delta_trans**和**keyframe_delta_angle**
+  * The minimum tranlational distance and rotation angle between keyframes. If this value is zero, frames are always compared with the previous frame
+
+## hdl_graph_slam.cpp
+
+* `cloud_callback(const nav_msgs::OdometryConstPtr& odom_msg, const sensor_msgs::PointCloud2::ConstPtr& cloud_msg)`该函数主要是odom信息与cloud信息的同步，同步之后检查关键帧是否更新；
+* 关键帧判断：
+
+  这里主要看关键帧设置的这两个阈值keyframe_delta_trans；keyframe_delta_angle；
+  作者认为关键帧不能设置的太近，同时也不能太远；太近的关键帧会被抛弃，如果 keyframe_delta_trans=0 表示关键帧之间的距离为0，因此每一帧都是关键帧，scan_matching 函数就会变成相邻帧匹配；变成关键帧的要求就是：
+
+  ```C++
   // calculate the delta transformation from the previous keyframe
-    Eigen::Isometry3d delta = prev_keypose.inverse() * pose;
-    double dx = delta.translation().norm();
-    double da = std::acos(Eigen::Quaterniond(delta.linear()).w());
+  Eigen::Isometry3d delta = prev_keypose.inverse() * pose;
+  double dx = delta.translation().norm();
+  double da = std::acos(Eigen::Quaterniond(delta.linear()).w());
 
-    // too close to the previous frame
-    if(dx < keyframe_delta_trans && da < keyframe_delta_angle) {
-      return false;
-    }
-    
- ```
- * optimization_timer_callback(const ros::TimerEvent& event) 将所有的位姿放在posegraph 中开始优化
-  * loop detection 函数 ： 主要就是将当前帧和历史帧遍历，寻找loop
-     *    寻找潜在闭环帧
-     ```
+  // too close to the previous frame
+  if(dx < keyframe_delta_trans && da < keyframe_delta_angle) {
+    return false;
+  }
+  ```
+
+* `optimization_timer_callback(const ros::TimerEvent& event)`将所有的位姿放在posegraph中开始优化
+  * `loop detection()`函数：主要就是将当前帧和历史帧遍历，寻找loop
+    * 寻找潜在闭环帧
+
+    ```C++
      find_candidates(const std::vector<KeyFrame::Ptr>& keyframes, const KeyFrame::Ptr& new_keyframe) const
-      ```
-      * 由于每个关键帧都建立累计距离，当前帧对应的累计距离-边的累计距距离<distance_from_last_edge_thresh 那么就不能建立闭环，意思就是相邻两个闭环帧不能建立的过于密集
-      * accum_distance_thresh 这里指的是当前帧与临近帧的距离阈值，假设距离阈值为5m, 那么当前帧距离5米范围内关键帧不再考虑
-      * distance_thresh 小于该阈值范围内两个关键帧为潜在闭环帧，将所有满足条件的都存起来作为candidates
-
-    
-  * 潜在闭环完成匹配（matching 函数）
-  
-  ```
-    Loop::Ptr matching(const std::vector<KeyFrame::Ptr>& candidate_keyframes, const KeyFrame::Ptr& new_keyframe, hdl_graph_slam::GraphSLAM& graph_slam) {
     ```
+
+    * 由于每个关键帧都建立累计距离，当前帧对应的累计距离-边的累计距距离 < distance_from_last_edge_thresh，那么就不能建立闭环，意思就是相邻两个闭环帧不能建立的过于密集；
+    * accum_distance_thresh 这里指的是当前帧与临近帧的距离阈值，假设距离阈值为5m, 那么当前帧距离5米范围内关键帧不再考虑；
+    * distance_thresh 小于该阈值范围内两个关键帧为潜在闭环帧，将所有满足条件的都存起来作为candidates、
+  * `matching()`函数：潜在闭环完成匹配
+
+    ```C++
+    Loop::Ptr matching(const std::vector<KeyFrame::Ptr>& candidate_keyframes, const KeyFrame::Ptr& new_keyframe, hdl_graph_slam::GraphSLAM& graph_slam)
+    ```
+
     主要是当前帧与潜在闭环帧完成点云匹配，通过统计得分寻找最优匹配，并且只将最优匹配对应的transform作为最为闭环约束，这里对应的就是fitness_score_thresh
-    
-*     **全场亮点:计算不同loop的信息矩阵**
-*     calc_information_matrix(loop->key1->cloud, loop->key2->cloud, relpose)  这里relpose 表示闭环帧之间的位姿约束 
-  * 首先判断是否使用常值信息矩阵，一般都是单位阵1/0.5=50  作为位姿， 1/0.1=10作为角度； 可以看出我们更相信位姿，而非角度；这里对应变量分别是：const_stddev_x const_stddev_q
-  * 这里的fitness_socre 的计算非常朴素，主要是通过建立KD-TREE 在目标点云里面寻找source 点云每个点对应的最近点并记录两点间的距离
-      fitness_score += nn_dists[i]; 
+
+* **全场亮点：计算不同loop的信息矩阵**
+* `calc_information_matrix(loop->key1->cloud, loop->key2->cloud, relpose)`  这里relpose表示闭环帧之间的位姿约束
+  * 首先判断是否使用常值信息矩阵，一般都是单位阵1/0.5=50  作为位姿， 1/0.1=10作为角度； 可以看出我们更相信位姿，而非角度；这里对应变量分别是：`const_stddev_x`和`const_stddev_q`
+  * 这里的fitness_socre的计算非常朴素，主要是通过建立KD-TREE在目标点云里面寻找source 点云每个点对应的最近点并记录两点间的距离
+
+      ```C++
+      fitness_score += nn_dists[i];
       return (fitness_score / n);
- 上面这两个式子实际是记录所有点的距离，并将所有点的距离/n=平均距离； 通过求所有闭环帧KD-TREE查找对应点的平均距离来作为fitness_score    
- 
-*  gps对应的信息矩阵（这里体现g2o的强大☞处）作者主要看这几件事：
-      * step1: GPS 坐标转换，主要是GPS地球坐标系->转换到大地坐标系（UTM)->UTM坐标系再转换成局部坐标
-      * step2:这里只用gps的 X和Y信息，z 方向的信息不用，主要原因是不准，这就涉及设置信息矩阵，注意信息矩阵的类型：
       ```
-      graph_slam->add_se3_prior_xy_edge((*seek)->node, xyz.head<2>(), information_matrix);
-      ```
-  
+
+  上面这两个式子实际是记录所有点的距离，并将所有点的距离/n=平均距离； 通过求所有闭环帧KD-TREE查找对应点的平均距离来作为fitness_score；
+* gps对应的信息矩阵（这里体现g2o的强大之处）作者主要看这几件事：
+  * step1: GPS 坐标转换，主要是GPS地球坐标系->转换到大地坐标系（UTM）->UTM坐标系再转换成局部坐标
+  * step2:这里只用gps的X和Y信息，z方向的信息不用，主要原因是不准，这就涉及设置信息矩阵，注意信息矩阵的类型：
+
+  ```C++
+  graph_slam->add_se3_prior_xy_edge((*seek)->node, xyz.head<2>(), information_matrix);
   ```
-      //添加GPS约束，只给xy增加约束
-g2o::EdgeSE3PriorXY* GraphSLAM::add_se3_prior_xy_edge(g2o::VertexSE3* v_se3, const Eigen::Vector2d& xy, const Eigen::MatrixXd& information_matrix) {
-     //添加该顶点
+
+  ```C++
+  //添加GPS约束，只给xy增加约束
+  g2o::EdgeSE3PriorXY* GraphSLAM::add_se3_prior_xy_edge(g2o::VertexSE3* v_se3, const Eigen::Vector2d& xy, const Eigen::MatrixXd& information_matrix) {
+    //添加该顶点
     g2o::EdgeSE3PriorXY* edge(new g2o::EdgeSE3PriorXY());
     //添加gps对应的测量值（xy）还是UTM坐标
-   edge->setMeasurement(xy);
-   //添加对应的信息矩阵
-  edge->setInformation(information_matrix);
-   //添加该顶点
-  edge->vertices()[0] = v_se3;
-  graph->addEdge(edge);
-
-  return edge;
-}
-```  
+    edge->setMeasurement(xy);
+    //添加对应的信息矩阵
+    edge->setInformation(information_matrix);
+    //添加该顶点
+    edge->vertices()[0] = v_se3;
+    graph->addEdge(edge);
+    return edge;
+  }
+  ```
 
 * 添加找对应的keyframe添加地面约束
+  * step1：检测平面，这里主要涉及floor_detection.cpp里面讲的平面检测；最后通过rassac计算平面系数
+  * step2：通过计算的平面系数来添加约束，主要对检测到平面的顶点，添加平面约束同时引进信息矩阵，信息矩阵是3*3的应该只对XYZ起到约束作用
 
-     * step1：检测平面，这里主要涉及floor_detection.cpp 里面讲的平面检测；最后通过rassac 计算平面系数
-     * step2：通过计算的平面系数来添加约束，主要对检测到平面的顶点，添加平面约束同时引进信息矩阵，信息矩阵是3*3的应该只对XYZ起到约束作用
-     
+  ```C++
+  //添加平面约束又得设置是0.1，有的设置是100
+  Eigen::Vector4d coeffs(floor_coeffs->coeffs[0], floor_coeffs->coeffs[1], floor_coeffs->coeffs[2], floor_coeffs->coeffs[3]);
+  Eigen::Matrix3d information = Eigen::Matrix3d::Identity() * (1.0 / floor_edge_stddev);
+  //添加平面约束
+  graph_slam->add_se3_plane_edge(keyframe->node, graph_slam->floor_plane_node, coeffs, information);
   ```
-      //添加平面约束又得设置是0.1，有的设置是100
-      Eigen::Vector4d coeffs(floor_coeffs->coeffs[0], floor_coeffs->coeffs[1], floor_coeffs->coeffs[2], floor_coeffs->coeffs[3]);
-      Eigen::Matrix3d information = Eigen::Matrix3d::Identity() * (1.0 / floor_edge_stddev);
-      //添加平面约束
-      graph_slam->add_se3_plane_edge(keyframe->node, graph_slam->floor_plane_node, coeffs, information);
-```
-```
-//添加平面约束
-g2o::EdgeSE3Plane* GraphSLAM::add_se3_plane_edge(g2o::VertexSE3* v_se3, g2o::VertexPlane* v_plane, const Eigen::Vector4d& plane_coeffs, const Eigen::MatrixXd& information_matrix) {
+
+  ```C++
+  //添加平面约束
+  g2o::EdgeSE3Plane* GraphSLAM::add_se3_plane_edge(g2o::VertexSE3* v_se3, g2o::VertexPlane* v_plane, const Eigen::Vector4d& plane_coeffs, const Eigen::MatrixXd& information_matrix) {
     //G2O本身自带平面这种边
     g2o::EdgeSE3Plane* edge(new g2o::EdgeSE3Plane());
-  //添加由ransssac 得到的平面系数
-  edge->setMeasurement(plane_coeffs);
-  //设置信息矩阵3*3
-  edge->setInformation(information_matrix);
-  //设置该顶点
-  edge->vertices()[0] = v_se3;
-  //以及该顶点对应的平面
-  edge->vertices()[1] = v_plane;
-  //添加平面
-  graph->addEdge(edge);
+    //添加由ransac 得到的平面系数
+    edge->setMeasurement(plane_coeffs);
+    //设置信息矩阵3*3
+    edge->setInformation(information_matrix);
+    //设置该顶点
+    edge->vertices()[0] = v_se3;
+    //以及该顶点对应的平面
+    edge->vertices()[1] = v_plane;
+    //添加平面
+    graph->addEdge(edge);
+    return edge;
+  }
+  ```
 
-  return edge;
-}
-```
-# 调试参数含义
-```
+## 调试参数含义
+
+```xml
 <?xml version="1.0"?>
 <launch>
   <!-- arguments -->
@@ -180,7 +192,7 @@ g2o::EdgeSE3Plane* GraphSLAM::add_se3_plane_edge(g2o::VertexSE3* v_se3, g2o::Ver
     <param name="sensor_height" value="2.0" />       <!--approximate sensor height [m]-->
     <param name="height_clip_range" value="0.5" />    <!--points with heights in [sensor_height - height_clip_range, sensor_height + height_clip_range] will be used for floor detection-->
     <param name="floor_pts_thresh" value="1024" />    <!-- minimum number of support points of RANSAC to accept a detected floor plane-->
-    <param name="floor_normal_thresh" value="5.0" />    <!--verticality check thresold for the detected floor plane [deg]-->
+    <param name="floor_normal_thresh" value="5.0" />    <!--verticality check threshold for the detected floor plane [deg]-->
     <param name="use_normal_fitlering" value="true" />   <!--if true, points with "non-"vertical normals will be filtered before RANSAC-->
     <param name="normal_filter_thresh" value="10.0" />      <!--"non-"verticality check threshold [deg]-->
   </node>
@@ -222,10 +234,3 @@ g2o::EdgeSE3Plane* GraphSLAM::add_se3_plane_edge(g2o::VertexSE3* v_se3, g2o::Ver
   <node pkg="hdl_graph_slam" type="map2odom_publisher.py" name="map2odom_publisher" />
 </launch>
 ```
-    
-    
- 
-   
-    
-   
-          
